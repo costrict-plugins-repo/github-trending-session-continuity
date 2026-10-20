@@ -1,0 +1,20 @@
+{
+  "name": "session-continuity",
+  "version": "0.38.0",
+  "description": "Cross-session memory for Claude Code projects via four in-repo docs: SESSION_PRIMER.md (thin Boot order / Mid-flight / Confirm / Peers snapshot), PROJECT_CONTEXT.md (stable repo context), ROADMAP.md (strategic direction), and LEARNINGS.md (hard-won bugs), plus GitHub Issues labeled backlog for the work queue.",
+  "author": {
+    "name": "Tal Golan"
+  },
+  "homepage": "https://github.com/talgolan/session-continuity",
+  "repository": "https://github.com/talgolan/session-continuity",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "session",
+    "handoff",
+    "continuity",
+    "documentation",
+    "onboarding",
+    "post-mortem"
+  ]
+}

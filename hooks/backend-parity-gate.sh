@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# backend-parity-gate.sh — commit-time content gate (session-continuity plugin).
+# Fires before Bash(git commit *). For each staged plan file that frames smoke as
+# multi-backend (mentions "backend(s)"), BLOCKS when fewer than two concrete
+# backends are named. Escape: `Backend-parity: N/A — <reason>`.
+set -euo pipefail
+# shellcheck disable=SC1091 # dynamically-resolved path; gate-common.sh is shellcheck-clean standalone
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/gate-common.sh"
+
+# shellcheck disable=SC2329 # called indirectly by gate_scan_staged
+backend_parity_in_scope() {
+  case "${1##*/}" in *.md) : ;; *) return 1 ;; esac
+  case "$1" in */plans/*) return 0 ;; esac
+  case "${1##*/}" in *plan*.md) return 0 ;; *) return 1 ;; esac
+}
+
+# shellcheck disable=SC2329 # called indirectly by gate_scan_staged
+backend_parity_check() {
+  local content="$1" path="$2" n hit_count=0
+  gate_triggered 'backends?\b' || return 0
+  for n in docker apple podman containerd colima kata lima orbstack; do
+    if printf '%s' "$content" | LC_ALL=C grep -Eiq "\\b${n}\\b"; then hit_count=$((hit_count + 1)); fi
+  done
+  if [ "$hit_count" -lt 2 ]; then
+    deny "In staged file $path: mentions 'backend(s)' but names fewer than two concrete backends. A smoke runner proven on only one backend has an unverified half — pair every backend-specific section with the other (e.g. Docker + Apple container). Name the second backend, or add: Backend-parity: N/A — <reason> (decoration fine) if there genuinely is only one."
+  fi
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  gate_load
+  gate_is_commit || exit 0
+  # shellcheck disable=SC2034 # consumed by sourced gate_scan_staged
+  GATE_LABEL="Backend-parity"
+  gate_scan_staged backend_parity_in_scope backend_parity_check
+  exit 0
+fi

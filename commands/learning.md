@@ -1,0 +1,162 @@
+---
+description: Append a new entry to .session-continuity/LEARNINGS.md interactively. Takes next N+1 number, inserts at top of chosen section.
+---
+
+# /session-continuity:learning $ARGUMENTS
+
+You are responding to the `/session-continuity:learning` slash command.
+
+**Your job: help the user append a properly-formatted entry to `.session-continuity/LEARNINGS.md`.**
+
+If `$ARGUMENTS` is non-empty, use it as the pre-filled title.
+
+## Step 1 — Preflight
+
+- If `.session-continuity/LEARNINGS.md` exists, use that path for the rest of this command.
+- Else tell the user:
+
+  > "No `.session-continuity/LEARNINGS.md` found. Run `/session-continuity:primer` first to initialize session-continuity in this project."
+
+  Exit.
+
+## Step 2 — Gather the recipe
+
+Prompt the user for each field. Show examples inline.
+
+1. **Title** (pre-filled with `$ARGUMENTS` if provided): short noun phrase. E.g. "resource_dir() returns `_up_/` paths".
+2. **The trap** (what seemed reasonable but was wrong): 1-3 sentences.
+3. **Symptom** (what was observed, including misleading errors): 1-3 sentences.
+4. **Fix** (what actually works): 1-3 sentences + optional code block.
+5. **Diagnostic signal** (optional — how to recognize this next time): one sentence. Skip if user has nothing.
+6. **Trigger** (REQUIRED unless the bug has no tool-call shape at all): a tool + regex that the `learnings-surface` hook matches against the imminent command or file, so this entry resurfaces *before* the action instead of only after a symptom makes it greppable. Form: `<tool> /<regex>/` where `<tool>` is `Bash`, `Write`, `Edit`, or `*`. E.g. `Bash /smoke|run\.zsh/` to resurface a smoke-runner trap before a smoke run; `Write /path\/to\/file\.ext/` to fire when a specific file is touched. Before skipping, actively look for a file path, command substring, or content pattern tied to the bug — most bugs have one. Only skip for entries that are purely conversational/workflow (e.g. "the user never answered a question") with no single tool invocation to hook on, and say so explicitly rather than silently omitting the line.
+7. **Occurrence count** (optional — recurrence tracking): Is this the Nth time this *class* of bug has bitten? Enter `N of M` (e.g. `2 of 2`). Skip for a first-occurrence entry. If the user enters N ≥ 2, item 8 below becomes REQUIRED.
+8. **Invariant** (REQUIRED when occurrence N ≥ 2; otherwise skip): the END-STATE that, enforced at the reconciler/entry gate, makes the whole class impossible on EVERY path — not another trigger-patch. CLAUDE.md rule 4. E.g. "a host-global port implies a host-global secret." The `occurrence-gate` hook will block a 2nd-occurrence entry that lacks this line.
+9. **Slug** (optional — stable cross-reference): auto-suggest a kebab-case slug derived from the title (lowercase, spaces to hyphens, strip punctuation), show it to the user, let them accept or override. Used so other entries (or notes elsewhere) can write `[[slug]]` instead of `see #N` — a slug survives renumbering, an entry number's *meaning* doesn't. Skip if the user declines; not every entry needs one, only ones likely to be cross-referenced.
+
+## Step 3 — Choose section
+
+Read `.session-continuity/LEARNINGS.md`. List existing section headings (lines starting with `## ` but not `### `, excluding `## Security incidents`, `## Anti-patterns we were tempted by (and rejected)`, `## Checklist for a fresh dev-env setup` which are structural).
+
+Ask the user:
+
+> "Which section does this belong to?
+> 1. <existing section 1>
+> 2. <existing section 2>
+> …
+> N. Security incidents
+> N+1. Anti-patterns we were tempted by (and rejected)
+> N+2. New section (you'll name it)"
+
+If they pick "new section", prompt for the heading and insert it above the existing sections (not above Security/Anti-patterns/Checklist, which stay at the bottom).
+
+## Step 4 — Compute next number (with uniqueness guard)
+
+Run the shared derivation script rather than re-deriving this by hand:
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/require-script.sh"
+if require_script "${CLAUDE_PLUGIN_ROOT}/hooks/lib/learnings-index.sh" 2; then
+  REPORT="$(bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/learnings-index.sh" report .session-continuity/LEARNINGS.md)"
+  if [ -z "$REPORT" ]; then
+    echo "⚠️ learnings-index.sh report failed — see the message above."
+  fi
+else
+  echo "⚠️ $SC_REQUIRE_SCRIPT_MSG"
+  REPORT=""
+fi
+```
+
+1. **Detect duplicates first.** If `$REPORT` contains any `DUPNUM` line, refuse to write and report:
+
+   > "LEARNINGS.md has duplicate entry numbers: #X (line A, line B), #Y (line C, line D). Fix the file before appending — pick which entry keeps the number and renumber the other (or merge them). Re-run `/session-continuity:learning` after."
+
+   (Build the message from every `DUPNUM <n> <lines>` line in `$REPORT`.) Exit. Do not append on top of a corrupt file.
+
+   An empty `$REPORT` means the script could not run at all — report that and stop,
+   rather than treating it as "no duplicates found".
+
+2. **Compute next number.** Read `MAX` from `$REPORT` (the `MAX <n>` line). New entry gets `MAX + 1`.
+
+After computing, validate: the chosen number must not already appear in the file (re-run the `report` script call above if a race is suspected). If it does, bump again and re-validate.
+
+3. **Validate the slug, if one was accepted.** Check `$REPORT` for a `DUPSLUG <proposed-slug> ...` line. If present, tell the user which entry already owns it and ask for a different slug (or decline to add one).
+
+## Step 5 — Insert at top of chosen section
+
+Compose the entry:
+
+```markdown
+### <N>. <Title>
+Slug: <kebab-slug>             ← include ONLY if the user accepted a slug; omit the whole line otherwise
+Trigger: <tool> /<regex>/      ← include ONLY if the user supplied a trigger; omit the whole line otherwise
+Occurrence count: <N of M>     ← include ONLY if supplied; omit otherwise
+Invariant: <end-state>          ← include ONLY when occurrence N >= 2; omit otherwise
+
+**The trap.** <trap text>
+
+**Symptom.** <symptom text>
+
+**Fix.** <fix text>
+
+[optional code block]
+
+**Diagnostic signal** *(optional)*. <diagnostic text if supplied>
+
+---
+```
+
+The `Trigger:` line, when present, must sit on the line directly below the `### N.` heading (no blank line between) so the `learnings-surface` hook's parser associates it with the entry.
+
+When present, `Slug:`, `Occurrence count:`, and `Invariant:` sit on their own lines in the metadata block directly under the heading (in that order, after `Trigger:` if it exists), each before the blank line that precedes `**The trap.**`. Omit any metadata line that has no value — never write an empty label.
+
+Insert immediately after the section heading (and any HTML comments that follow it). Keep a blank line between the heading and the new entry.
+
+## Step 6 — Regenerate the Symptoms index
+
+Every entry's `**Symptom.**` line is searchable, but with enough entries a reader won't know which section to grep. Keep a flat, alphabetized index at the top of the file so symptom-first search works regardless of section.
+
+Run the shared derivation script after Step 5 has inserted the new entry:
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/require-script.sh"
+if require_script "${CLAUDE_PLUGIN_ROOT}/hooks/lib/learnings-index.sh" 2; then
+  if ! bash "${CLAUDE_PLUGIN_ROOT}/hooks/lib/learnings-index.sh" reindex .session-continuity/LEARNINGS.md; then
+    echo "⚠️ Symptoms index not regenerated — LEARNINGS.md was left untouched (see the message above)."
+  fi
+else
+  echo "⚠️ $SC_REQUIRE_SCRIPT_MSG — Symptoms index not regenerated this run."
+fi
+```
+
+This regenerates `## Symptoms index` wholesale from every entry's
+`**Symptom.**` line (creating the section when absent), applying a hard
+12-word cutoff with a trailing "…" if cut, sorted dictionary-order
+case-insensitive. Idempotent: running it twice with no new entry in
+between produces no change. This section is fully derived — never
+hand-edit it.
+
+## Step 7 — Bump the footer
+
+If the file has a footer line of the form `*Last reviewed: <date>...` or `*Last entry: <date> (#<N>)...`, update it in place:
+
+- Replace with `*Last entry: <today's-date> (#<N>). Add new entries at the top of each section`
+- Today's date: ISO format (`YYYY-MM-DD`) — derive from the system clock, not from session context.
+- `<N>` is the number assigned in Step 4.
+
+The rename from "Last reviewed" to "Last entry" reflects what the field actually tracks (the timestamp of the last *change*, not a manual review pass). If the footer doesn't exist, skip — don't synthesize one.
+
+## Step 8 — Stage
+
+Run: `git add .session-continuity/LEARNINGS.md`
+
+Tell the user: "Learning #<N> appended and staged. Commit when ready — typically alongside the fix or in its own commit if the fix already landed."
+
+**Do not commit automatically.**
+
+## Notes
+
+- **Numbering is stable.** Never renumber existing entries. Old entries keep their numbers even when new entries arrive at the top.
+- **Slugs are stable too.** Once an entry has a `Slug:`, never change it — other entries or memory files may already reference it as `[[slug]]`. To cross-reference a slugged entry from elsewhere in LEARNINGS.md, write `[[slug]]` in prose (e.g. "see also [[worktree-git-dash-c-block]]"); resolve it by grepping `^Slug: <slug>` — the same convention the auto-memory `MEMORY.md` index uses for `[[name]]` links.
+- **The Symptoms index is derived, not authored.** Never hand-edit `## Symptoms index` — it's regenerated wholesale in Step 6 every time this command runs. If it looks wrong, fix the source `**Symptom.**` line, then re-run.
+- **Never invent details.** If the user says "I don't know" for a field, leave it blank or omit it (except trap/symptom/fix, which are required — push back gently if the user skips them).
+- **Redact secrets.** Never put actual credential values in the file. Use `<redacted>` or a description.
